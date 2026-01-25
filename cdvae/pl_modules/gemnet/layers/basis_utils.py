@@ -9,6 +9,8 @@ import numpy as np
 import sympy as sym
 from scipy import special as sp
 from scipy.optimize import brentq
+import math
+np.math = math
 
 
 def Jn(r, n):
