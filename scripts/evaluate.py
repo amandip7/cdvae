@@ -143,7 +143,73 @@ def generation(model, ld_kwargs, num_batches_to_sample, num_samples_per_z,
 
 def optimization(model, ld_kwargs, data_loader,
                  num_starting_points=100, num_gradient_steps=5000,
-                 lr=1e-3, num_saved_crys=10):
+                 lr=1e-3, num_saved_crys=10, target_value=None):
+    if data_loader is not None and target_value is not None:
+        print(f"Optimizing for target value: {target_value}")
+        target_tensor = torch.tensor([target_value], device=model.device, dtype=torch.float)
+        if hasattr(model, 'scaler') and model.scaler is not None:
+            target_norm = (target_tensor - model.scaler.means.to(model.device)) / model.scaler.stds.to(model.device)
+        else:
+            target_norm = target_tensor
+
+        all_frac_coords = []
+        all_num_atoms = []
+        all_atom_types = []
+        all_lengths = []
+        all_angles = []
+        
+        total_solved = 0
+        total_samples = 0
+
+        model.freeze()
+        for batch_idx, batch in enumerate(data_loader):
+            batch = batch.to(model.device)
+            _, _, z = model.encode(batch)
+            z = z.detach().clone()
+            z.requires_grad = True
+            
+            opt = Adam([z], lr=lr)
+            
+            for _ in range(num_gradient_steps):
+                opt.zero_grad()
+                pred = model.fc_property(z)
+                loss = ((pred - target_norm) ** 2).mean()
+                loss.backward()
+                opt.step()
+            
+            with torch.no_grad():
+                final_pred = model.fc_property(z)
+                if hasattr(model, 'scaler') and model.scaler is not None:
+                    final_pred_real = final_pred * model.scaler.stds.to(model.device) + model.scaler.means.to(model.device)
+                else:
+                    final_pred_real = final_pred
+                
+                diff = torch.abs(final_pred_real - target_tensor)
+                solved = (diff < 0.1).sum().item()
+                total_solved += solved
+                total_samples += z.size(0)
+                
+                crystals = model.langevin_dynamics(z, ld_kwargs)
+                all_frac_coords.append(crystals['frac_coords'].detach().cpu())
+                all_num_atoms.append(crystals['num_atoms'].detach().cpu())
+                all_atom_types.append(crystals['atom_types'].detach().cpu())
+                all_lengths.append(crystals['lengths'].detach().cpu())
+                all_angles.append(crystals['angles'].detach().cpu())
+            
+            print(f"Batch {batch_idx} processed. Solved: {solved}/{z.size(0)}")
+
+        success_rate = total_solved / total_samples if total_samples > 0 else 0.0
+        print(f"Total Success Rate: {success_rate * 100:.2f}% ({total_solved}/{total_samples})")
+
+        return {
+            'frac_coords': torch.cat(all_frac_coords, dim=0).unsqueeze(0),
+            'num_atoms': torch.cat(all_num_atoms, dim=0).unsqueeze(0),
+            'atom_types': torch.cat(all_atom_types, dim=0).unsqueeze(0),
+            'lengths': torch.cat(all_lengths, dim=0).unsqueeze(0),
+            'angles': torch.cat(all_angles, dim=0).unsqueeze(0),
+            'success_rate': success_rate
+        }
+
     if data_loader is not None:
         batch = next(iter(data_loader)).to(model.device)
         _, _, z = model.encode(batch)
@@ -246,7 +312,7 @@ def main(args):
             loader = test_loader
         else:
             loader = None
-        optimized_crystals = optimization(model, ld_kwargs, loader)
+        optimized_crystals = optimization(model, ld_kwargs, loader, target_value=args.target_value)
         optimized_crystals.update({'eval_setting': args,
                                    'time': time.time() - start_time})
 
@@ -274,6 +340,7 @@ if __name__ == '__main__':
     parser.add_argument('--force_atom_types', action='store_true')
     parser.add_argument('--down_sample_traj_step', default=10, type=int)
     parser.add_argument('--label', default='')
+    parser.add_argument('--target_value', default=None, type=float)
 
     args = parser.parse_args()
 
