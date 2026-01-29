@@ -1,6 +1,8 @@
 import time
 import argparse
 import torch
+import random
+import numpy as np
 
 from tqdm import tqdm
 from torch.optim import Adam
@@ -239,6 +241,13 @@ def optimization(model, ld_kwargs, data_loader,
 
 
 def main(args):
+    # Set random seed for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
     # load_data if do reconstruction.
     model_path = Path(args.model_path)
     model, test_loader, cfg = load_model(
@@ -341,6 +350,7 @@ if __name__ == '__main__':
     parser.add_argument('--down_sample_traj_step', default=10, type=int)
     parser.add_argument('--label', default='')
     parser.add_argument('--target_value', default=None, type=float)
+    parser.add_argument('--seed', default=42, type=int)
 
     args = parser.parse_args()
 
