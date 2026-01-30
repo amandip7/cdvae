@@ -4,7 +4,7 @@ import numpy as np
 import random
 from ase import Atoms
 from ase.io import Trajectory
-from ase.geometry import cell_from_parameters
+from ase.geometry import cellpar_to_cell 
 
 def set_seed(seed):
     random.seed(seed)
@@ -40,8 +40,8 @@ def main(args):
         start_idx = 0
         for i in range(len(num_atoms)):
             n_atoms = int(num_atoms[i])
-            if n_atoms == 0:
-                continue
+            # if n_atoms == 0:
+            #     continue
             
             # Extract properties for the current crystal
             current_frac_coords = frac_coords[start_idx:start_idx + n_atoms]
@@ -50,28 +50,44 @@ def main(args):
             current_lengths = lengths[i]
             current_angles = angles[i]
 
-            # Create Unit Cell
-            cell = cell_from_parameters(
-                current_lengths[0].item(),
-                current_lengths[1].item(),
-                current_lengths[2].item(),
-                current_angles[0].item(),
-                current_angles[1].item(),
-                current_angles[2].item()
-            )
+            try:
+                # Create Unit Cell
+                cell = cellpar_to_cell ([
+                    current_lengths[0].item(),
+                    current_lengths[1].item(),
+                    current_lengths[2].item(),
+                    current_angles[0].item(),
+                    current_angles[1].item(),
+                    current_angles[2].item()
+                ])
 
-            # Create ASE Atoms object
-            atoms = Atoms(
-                numbers=current_atom_types.numpy(),
-                scaled_positions=current_frac_coords.numpy(),
-                cell=cell,
-                pbc=True
-            )
+                # Create ASE Atoms object
+                atoms = Atoms(
+                    numbers=current_atom_types.numpy(),
+                    scaled_positions=current_frac_coords.numpy(),
+                    cell=cell,
+                    pbc=True
+                )
+                
+                atoms.info['valid'] = True
+            except Exception as e:
+                # Insert dummy structure to maintain 1-1 correspondence
+                # Atomic number 0 is 'X' (dummy)
+                atoms = Atoms(numbers=[0], positions=[[0, 0, 0]], cell=[1, 1, 1], pbc=True)
+                atoms.info['valid'] = False
+                atoms.info['error'] = str(e)
+
             all_atoms_list.append(atoms)
             
+            # Advance the start index for the next crystal
             start_idx += n_atoms
 
     print(f"Converted {len(all_atoms_list)} structures.")
+    successful_count = len([
+        atoms for atoms in all_atoms_list if atoms.info['valid']
+    ])
+    unsuccessful_count = len(all_atoms_list) - successful_count
+    print(f"Successfully parsed = {successful_count} ({successful_count*100/len(all_atoms_list)} %)")
     print(f"Saving to {args.output_path}...")
     
     traj = Trajectory(args.output_path, 'w')
